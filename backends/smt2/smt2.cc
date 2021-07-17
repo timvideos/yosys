@@ -1,7 +1,7 @@
 /*
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
  *  purpose with or without fee is hereby granted, provided that the above
@@ -124,6 +124,7 @@ struct Smt2Worker
 		memories = Mem::get_all_memories(module);
 		for (auto &mem : memories)
 		{
+			mem.narrow();
 			mem_dict[mem.memid] = &mem;
 			for (auto &port : mem.wr_ports)
 			{
@@ -182,7 +183,7 @@ struct Smt2Worker
 				continue;
 
 			// Handled above.
-			if (cell->type.in(ID($mem), ID($memrd), ID($memwr), ID($meminit))) {
+			if (cell->is_mem_cell()) {
 				mem_cells[cell] = mem_dict[cell->parameters.at(ID::MEMID).decode_string()];
 				continue;
 			}
@@ -694,7 +695,7 @@ struct Smt2Worker
 			// FIXME: $slice $concat
 		}
 
-		if (memmode && cell->type.in(ID($mem), ID($memrd), ID($memwr), ID($meminit)))
+		if (memmode && cell->is_mem_cell())
 		{
 			Mem *mem = mem_cells[cell];
 

@@ -1,7 +1,7 @@
 /* -*- c++ -*-
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
  *  purpose with or without fee is hereby granted, provided that the above
@@ -160,7 +160,8 @@ namespace AST
 		AST_TYPEDEF,
 		AST_STRUCT,
 		AST_UNION,
-		AST_STRUCT_ITEM
+		AST_STRUCT_ITEM,
+		AST_BIND
 	};
 
 	struct AstSrcLocType {
@@ -291,7 +292,7 @@ namespace AST
 		// for expressions the resulting signal vector is returned
 		// all generated cell instances, etc. are written to the RTLIL::Module pointed to by AST_INTERNAL::current_module
 		RTLIL::SigSpec genRTLIL(int width_hint = -1, bool sign_hint = false);
-		RTLIL::SigSpec genWidthRTLIL(int width, const dict<RTLIL::SigBit, RTLIL::SigBit> *new_subst_ptr = NULL);
+		RTLIL::SigSpec genWidthRTLIL(int width, bool sgn, const dict<RTLIL::SigBit, RTLIL::SigBit> *new_subst_ptr = NULL);
 
 		// compare AST nodes
 		bool operator==(const AstNode &other) const;
@@ -326,6 +327,9 @@ namespace AST
 
 		// helpers for locations
 		std::string loc_string() const;
+
+		// Helper for looking up identifiers which are prefixed with the current module name
+		std::string try_pop_module_prefix() const;
 	};
 
 	// process an AST tree (ast must point to an AST_DESIGN node) and generate RTLIL code
@@ -367,6 +371,9 @@ namespace AST
 
 	// Helper for setting the src attribute.
 	void set_src_attr(RTLIL::AttrObject *obj, const AstNode *ast);
+
+	// struct helper exposed from simplify for genrtlil
+	AstNode *make_struct_member_range(AstNode *node, AstNode *member_node);
 }
 
 namespace AST_INTERNAL
@@ -379,7 +386,7 @@ namespace AST_INTERNAL
 	extern const dict<RTLIL::SigBit, RTLIL::SigBit> *genRTLIL_subst_ptr;
 	extern RTLIL::SigSpec ignoreThisSignalsInInitial;
 	extern AST::AstNode *current_always, *current_top_block, *current_block, *current_block_child;
-	extern AST::AstModule *current_module;
+	extern RTLIL::Module *current_module;
 	extern bool current_always_clocked;
 	extern dict<std::string, int> current_memwr_count;
 	extern dict<std::string, pool<int>> current_memwr_visible;

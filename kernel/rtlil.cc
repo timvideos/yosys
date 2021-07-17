@@ -1,7 +1,7 @@
 /*
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
  *  purpose with or without fee is hereby granted, provided that the above
@@ -363,6 +363,26 @@ bool RTLIL::Const::is_fully_undef() const
 	return true;
 }
 
+bool RTLIL::Const::is_onehot(int *pos) const
+{
+	cover("kernel.rtlil.const.is_onehot");
+
+	bool found = false;
+	for (int i = 0; i < GetSize(*this); i++) {
+		auto &bit = bits[i];
+		if (bit != RTLIL::State::S0 && bit != RTLIL::State::S1)
+			return false;
+		if (bit == RTLIL::State::S1) {
+			if (found)
+				return false;
+			if (pos)
+				*pos = i;
+			found = true;
+		}
+	}
+	return found;
+}
+
 bool RTLIL::AttrObject::has_attribute(RTLIL::IdString id) const
 {
 	return attributes.count(id);
@@ -551,8 +571,8 @@ RTLIL::Design::Design()
 
 RTLIL::Design::~Design()
 {
-	for (auto it = modules_.begin(); it != modules_.end(); ++it)
-		delete it->second;
+	for (auto &pr : modules_)
+		delete pr.second;
 	for (auto n : verilog_packages)
 		delete n;
 	for (auto n : verilog_globals)
@@ -844,14 +864,14 @@ RTLIL::Module::Module()
 
 RTLIL::Module::~Module()
 {
-	for (auto it = wires_.begin(); it != wires_.end(); ++it)
-		delete it->second;
-	for (auto it = memories.begin(); it != memories.end(); ++it)
-		delete it->second;
-	for (auto it = cells_.begin(); it != cells_.end(); ++it)
-		delete it->second;
-	for (auto it = processes.begin(); it != processes.end(); ++it)
-		delete it->second;
+	for (auto &pr : wires_)
+		delete pr.second;
+	for (auto &pr : memories)
+		delete pr.second;
+	for (auto &pr : cells_)
+		delete pr.second;
+	for (auto &pr : processes)
+		delete pr.second;
 #ifdef WITH_PYTHON
 	RTLIL::Module::get_all_modules()->erase(hashidx_);
 #endif
@@ -1819,6 +1839,14 @@ void RTLIL::Module::add(RTLIL::Cell *cell)
 	cell->module = this;
 }
 
+void RTLIL::Module::add(RTLIL::Process *process)
+{
+	log_assert(!process->name.empty());
+	log_assert(count_id(process->name) == 0);
+	processes[process->name] = process;
+	process->module = this;
+}
+
 void RTLIL::Module::remove(const pool<RTLIL::Wire*> &wires)
 {
 	log_assert(refcount_wires_ == 0);
@@ -1873,6 +1901,13 @@ void RTLIL::Module::remove(RTLIL::Cell *cell)
 	log_assert(refcount_cells_ == 0);
 	cells_.erase(cell->name);
 	delete cell;
+}
+
+void RTLIL::Module::remove(RTLIL::Process *process)
+{
+	log_assert(processes.count(process->name) != 0);
+	processes.erase(process->name);
+	delete process;
 }
 
 void RTLIL::Module::rename(RTLIL::Wire *wire, RTLIL::IdString new_name)
@@ -2100,11 +2135,19 @@ RTLIL::Memory *RTLIL::Module::addMemory(RTLIL::IdString name, const RTLIL::Memor
 	return mem;
 }
 
+RTLIL::Process *RTLIL::Module::addProcess(RTLIL::IdString name)
+{
+	RTLIL::Process *proc = new RTLIL::Process;
+	proc->name = name;
+	add(proc);
+	return proc;
+}
+
 RTLIL::Process *RTLIL::Module::addProcess(RTLIL::IdString name, const RTLIL::Process *other)
 {
 	RTLIL::Process *proc = other->clone();
 	proc->name = name;
-	processes[name] = proc;
+	add(proc);
 	return proc;
 }
 
@@ -2900,6 +2943,13 @@ RTLIL::Memory::Memory()
 #endif
 }
 
+RTLIL::Process::Process() : module(nullptr)
+{
+	static unsigned int hashidx_count = 123456789;
+	hashidx_count = mkhash_xorshift(hashidx_count);
+	hashidx_ = hashidx_count;
+}
+
 RTLIL::Cell::Cell() : module(nullptr)
 {
 	static unsigned int hashidx_count = 123456789;
@@ -3123,6 +3173,16 @@ void RTLIL::Cell::fixup_parameters(bool set_a_signed, bool set_b_signed)
 		parameters[ID::WIDTH] = GetSize(connections_[ID::Q]);
 
 	check();
+}
+
+bool RTLIL::Cell::has_memid() const
+{
+	return type.in(ID($memwr), ID($memrd), ID($meminit));
+}
+
+bool RTLIL::Cell::is_mem_cell() const
+{
+	return type == ID($mem) || has_memid();
 }
 
 RTLIL::SigChunk::SigChunk()
@@ -4198,6 +4258,19 @@ bool RTLIL::SigSpec::has_marked_bits() const
 				if (it->data[i] == RTLIL::State::Sm)
 					return true;
 		}
+	return false;
+}
+
+bool RTLIL::SigSpec::is_onehot(int *pos) const
+{
+	cover("kernel.rtlil.sigspec.is_onehot");
+
+	pack();
+	if (!is_fully_const())
+		return false;
+	log_assert(GetSize(chunks_) <= 1);
+	if (width_)
+		return RTLIL::Const(chunks_[0].data).is_onehot(pos);
 	return false;
 }
 

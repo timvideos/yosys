@@ -1,7 +1,7 @@
 /* -*- c++ -*-
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
  *  purpose with or without fee is hereby granted, provided that the above
@@ -662,6 +662,7 @@ struct RTLIL::Const
 	bool is_fully_ones() const;
 	bool is_fully_def() const;
 	bool is_fully_undef() const;
+	bool is_onehot(int *pos = nullptr) const;
 
 	inline RTLIL::Const extract(int offset, int len = 1, RTLIL::State padding = RTLIL::State::S0) const {
 		RTLIL::Const ret;
@@ -934,6 +935,7 @@ public:
 	bool is_fully_undef() const;
 	bool has_const() const;
 	bool has_marked_bits() const;
+	bool is_onehot(int *pos = nullptr) const;
 
 	bool as_bool() const;
 	int as_int(bool is_signed = false) const;
@@ -1127,6 +1129,7 @@ struct RTLIL::Module : public RTLIL::AttrObject
 protected:
 	void add(RTLIL::Wire *wire);
 	void add(RTLIL::Cell *cell);
+	void add(RTLIL::Process *process);
 
 public:
 	RTLIL::Design *design;
@@ -1207,6 +1210,7 @@ public:
 	// Removing wires is expensive. If you have to remove wires, remove them all at once.
 	void remove(const pool<RTLIL::Wire*> &wires);
 	void remove(RTLIL::Cell *cell);
+	void remove(RTLIL::Process *process);
 
 	void rename(RTLIL::Wire *wire, RTLIL::IdString new_name);
 	void rename(RTLIL::Cell *cell, RTLIL::IdString new_name);
@@ -1226,6 +1230,7 @@ public:
 
 	RTLIL::Memory *addMemory(RTLIL::IdString name, const RTLIL::Memory *other);
 
+	RTLIL::Process *addProcess(RTLIL::IdString name);
 	RTLIL::Process *addProcess(RTLIL::IdString name, const RTLIL::Process *other);
 
 	// The add* methods create a cell and return the created cell. All signals must exist in advance.
@@ -1522,6 +1527,9 @@ public:
 #ifdef WITH_PYTHON
 	static std::map<unsigned int, RTLIL::Cell*> *get_all_cells(void);
 #endif
+
+	bool has_memid() const;
+	bool is_mem_cell() const;
 };
 
 struct RTLIL::CaseRule : public RTLIL::AttrObject
@@ -1576,11 +1584,20 @@ struct RTLIL::SyncRule
 
 struct RTLIL::Process : public RTLIL::AttrObject
 {
+	unsigned int hashidx_;
+	unsigned int hash() const { return hashidx_; }
+
+protected:
+	// use module->addProcess() and module->remove() to create or destroy processes
+	friend struct RTLIL::Module;
+	Process();
+	~Process();
+
+public:
 	RTLIL::IdString name;
+	RTLIL::Module *module;
 	RTLIL::CaseRule root_case;
 	std::vector<RTLIL::SyncRule*> syncs;
-
-	~Process();
 
 	template<typename T> void rewrite_sigspecs(T &functor);
 	template<typename T> void rewrite_sigspecs2(T &functor);

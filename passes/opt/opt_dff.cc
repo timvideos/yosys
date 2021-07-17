@@ -1,7 +1,7 @@
 /*
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *  Copyright (C) 2020  Marcelina Kościelnicka <mwk@0x04.net>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
@@ -318,9 +318,9 @@ struct OptDffWorker
 						if (!ff.pol_clr) {
 							module->connect(ff.sig_q[i], ff.sig_clr[i]);
 						} else if (ff.is_fine) {
-							module->addNotGate(NEW_ID, ff.sig_q[i], ff.sig_clr[i]);
+							module->addNotGate(NEW_ID, ff.sig_clr[i], ff.sig_q[i]);
 						} else {
-							module->addNot(NEW_ID, ff.sig_q[i], ff.sig_clr[i]);
+							module->addNot(NEW_ID, ff.sig_clr[i], ff.sig_q[i]);
 						}
 						log("Handling always-active SET at position %d on %s (%s) from module %s (changing to combinatorial circuit).\n",
 								i, log_id(cell), log_id(cell->type), log_id(module));

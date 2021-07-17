@@ -1,7 +1,7 @@
 /*
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
  *  purpose with or without fee is hereby granted, provided that the above
@@ -38,9 +38,10 @@ struct MemoryPass : public Pass {
 		log("    opt_mem\n");
 		log("    memory_dff                          (skipped if called with -nordff or -memx)\n");
 		log("    opt_clean\n");
+		log("    opt_mem_feedback\n");
 		log("    memory_share\n");
-		log("    opt_clean\n");
 		log("    memory_memx                         (when called with -memx)\n");
+		log("    opt_clean\n");
 		log("    memory_collect\n");
 		log("    memory_bram -rules <bram_rules>     (when called with -bram)\n");
 		log("    memory_map                          (skipped if called with -nomap)\n");
@@ -86,6 +87,7 @@ struct MemoryPass : public Pass {
 		if (!flag_nordff)
 			Pass::call(design, "memory_dff");
 		Pass::call(design, "opt_clean");
+		Pass::call(design, "opt_mem_feedback");
 		Pass::call(design, "memory_share");
 		if (flag_memx)
 			Pass::call(design, "memory_memx");

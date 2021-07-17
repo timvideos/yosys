@@ -1,7 +1,7 @@
 /*
  *  yosys -- Yosys Open SYnthesis Suite
  *
- *  Copyright (C) 2012  Clifford Wolf <clifford@clifford.at>
+ *  Copyright (C) 2012  Claire Xenia Wolf <claire@yosyshq.com>
  *
  *  Permission to use, copy, modify, and/or distribute this software for any
  *  purpose with or without fee is hereby granted, provided that the above
@@ -331,6 +331,8 @@ static int size_packed_struct(AstNode *snode, int base_offset)
 					}
 				}
 				// range nodes are now redundant
+				for (AstNode *child : node->children)
+					delete child;
 				node->children.clear();
 			}
 			else if (node->children.size() == 1 && node->children[0]->type == AST_MULTIRANGE) {
@@ -345,6 +347,8 @@ static int size_packed_struct(AstNode *snode, int base_offset)
 				save_struct_array_width(node, width);
 				width *= array_count;
 				// range nodes are now redundant
+				for (AstNode *child : node->children)
+					delete child;
 				node->children.clear();
 			}
 			else if (node->range_left < 0) {
@@ -452,7 +456,7 @@ static AstNode *slice_range(AstNode *rnode, AstNode *snode)
 }
 
 
-static AstNode *make_struct_member_range(AstNode *node, AstNode *member_node)
+AstNode *AST::make_struct_member_range(AstNode *node, AstNode *member_node)
 {
 	// Work out the range in the packed array that corresponds to a struct member
 	// taking into account any range operations applicable to the current node
@@ -875,7 +879,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 		for (size_t i = 0; i < children.size(); i++) {
 			AstNode *node = children[i];
 			// these nodes appear at the top level in a package and can define names
-			if (node->type == AST_PARAMETER || node->type == AST_LOCALPARAM || node->type == AST_TYPEDEF) {
+			if (node->type == AST_PARAMETER || node->type == AST_LOCALPARAM || node->type == AST_TYPEDEF || node->type == AST_FUNCTION || node->type == AST_TASK) {
 				current_scope[node->str] = node;
 			}
 			if (node->type == AST_ENUM) {
@@ -1185,8 +1189,12 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 
 	if (const_fold && type == AST_CASE)
 	{
+		int width_hint;
+		bool sign_hint;
+		detectSignWidth(width_hint, sign_hint);
 		while (children[0]->simplify(const_fold, at_zero, in_lvalue, stage, width_hint, sign_hint, in_param)) { }
 		if (children[0]->type == AST_CONSTANT && children[0]->bits_only_01()) {
+			RTLIL::Const case_expr = children[0]->bitsAsConst(width_hint, sign_hint);
 			std::vector<AstNode*> new_children;
 			new_children.push_back(children[0]);
 			for (int i = 1; i < GetSize(children); i++) {
@@ -1199,7 +1207,10 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 						continue;
 					while (v->simplify(const_fold, at_zero, in_lvalue, stage, width_hint, sign_hint, in_param)) { }
 					if (v->type == AST_CONSTANT && v->bits_only_01()) {
-						if (v->bits == children[0]->bits) {
+						RTLIL::Const case_item_expr = v->bitsAsConst(width_hint, sign_hint);
+						RTLIL::Const match = const_eq(case_expr, case_item_expr, sign_hint, sign_hint, 1);
+						log_assert(match.bits.size() == 1);
+						if (match.bits.front() == RTLIL::State::S1) {
 							while (i+1 < GetSize(children))
 								delete children[++i];
 							goto keep_const_cond;
@@ -1682,6 +1693,8 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 					newNode = new AstNode(AST_IDENTIFIER, range);
 					newNode->str = sname;
 					newNode->basic_prep = true;
+					if (item_node->is_signed)
+						newNode = new AstNode(AST_TO_SIGNED, newNode);
 					goto apply_newNode;
 				}
 			}
@@ -1691,17 +1704,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 	if (type == AST_IDENTIFIER) {
 		if (current_scope.count(str) == 0) {
 			AstNode *current_scope_ast = (current_ast_mod == nullptr) ? current_ast : current_ast_mod;
-			size_t pos = str.find('.', 1);
-			if (str[0] == '\\' && pos != std::string::npos) {
-				std::string new_str = "\\" + str.substr(pos + 1);
-				if (current_scope.count(new_str)) {
-					std::string prefix = str.substr(0, pos);
-					auto it = current_scope_ast->attributes.find(ID::hdlname);
-					if ((it != current_scope_ast->attributes.end() && it->second->str == prefix)
-							|| prefix == current_scope_ast->str)
-						str = new_str;
-				}
-			}
+			str = try_pop_module_prefix();
 			for (auto node : current_scope_ast->children) {
 				//log("looking at mod scope child %s\n", type2str(node->type).c_str());
 				switch (node->type) {
@@ -1755,7 +1758,7 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 	}
 
 	// split memory access with bit select to individual statements
-	if (type == AST_IDENTIFIER && children.size() == 2 && children[0]->type == AST_RANGE && children[1]->type == AST_RANGE && !in_lvalue)
+	if (type == AST_IDENTIFIER && children.size() == 2 && children[0]->type == AST_RANGE && children[1]->type == AST_RANGE && !in_lvalue && stage == 2)
 	{
 		if (id2ast == NULL || id2ast->type != AST_MEMORY || children[0]->children.size() != 1)
 			log_file_error(filename, location.first_line, "Invalid bit-select on memory access!\n");
@@ -2306,6 +2309,8 @@ bool AstNode::simplify(bool const_fold, bool at_zero, bool in_lvalue, int stage,
 			if (left_at_zero_ast->type != AST_CONSTANT || right_at_zero_ast->type != AST_CONSTANT)
 				log_file_error(filename, location.first_line, "Unsupported expression on dynamic range select on signal `%s'!\n", str.c_str());
 			result_width = abs(int(left_at_zero_ast->integer - right_at_zero_ast->integer)) + 1;
+			delete left_at_zero_ast;
+			delete right_at_zero_ast;
 		}
 
 		bool use_case_method = false;
@@ -3537,6 +3542,8 @@ skip_dynamic_range_lvalue_expansion:;
 					// convert purely constant arguments into localparams
 					if (child->is_input && child->type == AST_WIRE && arg->type == AST_CONSTANT && node_contains_assignment_to(decl, child)) {
 						wire->type = AST_LOCALPARAM;
+						if (wire->attributes.count(ID::nosync))
+							delete wire->attributes.at(ID::nosync);
 						wire->attributes.erase(ID::nosync);
 						wire->children.insert(wire->children.begin(), arg->clone());
 						// args without a range implicitly have width 1
@@ -3560,6 +3567,7 @@ skip_dynamic_range_lvalue_expansion:;
 						}
 						// updates the sizing
 						while (wire->simplify(true, false, false, 1, -1, false, false)) { }
+						delete arg;
 						continue;
 					}
 					AstNode *wire_id = new AstNode(AST_IDENTIFIER);
@@ -4494,11 +4502,48 @@ bool AstNode::mem2reg_as_needed_pass2(pool<AstNode*> &mem2reg_set, AstNode *mod,
 		if (children[0]->children[0]->type == AST_CONSTANT)
 		{
 			int id = children[0]->children[0]->integer;
-			str = stringf("%s[%d]", str.c_str(), id);
+			int left = id2ast->children[1]->children[0]->integer;
+			int right = id2ast->children[1]->children[1]->integer;
+			bool valid_const_access =
+				(left <= id && id <= right) ||
+				(right <= id && id <= left);
+			if (valid_const_access)
+			{
+				str = stringf("%s[%d]", str.c_str(), id);
+				delete_children();
+				range_valid = false;
+				id2ast = NULL;
+			}
+			else
+			{
+				int width;
+				if (bit_part_sel)
+				{
+					bit_part_sel->dumpAst(nullptr, "? ");
+					if (bit_part_sel->children.size() == 1)
+						width = 0;
+					else
+						width = bit_part_sel->children[0]->integer -
+							bit_part_sel->children[1]->integer;
+					delete bit_part_sel;
+					bit_part_sel = nullptr;
+				}
+				else
+				{
+					width = id2ast->children[0]->children[0]->integer -
+						id2ast->children[0]->children[1]->integer;
+				}
+				width = abs(width) + 1;
 
-			delete_children();
-			range_valid = false;
-			id2ast = NULL;
+				delete_children();
+
+				std::vector<RTLIL::State> x_bits;
+				for (int i = 0; i < width; i++)
+					x_bits.push_back(RTLIL::State::Sx);
+				AstNode *constant = AstNode::mkconst_bits(x_bits, false);
+				constant->cloneInto(this);
+				delete constant;
+			}
 		}
 		else
 		{
@@ -4735,6 +4780,7 @@ AstNode *AstNode::eval_const_function(AstNode *fcall, bool must_succeed)
 {
 	std::map<std::string, AstNode*> backup_scope = current_scope;
 	std::map<std::string, AstNode::varinfo_t> variables;
+	std::vector<AstNode*> to_delete;
 	AstNode *block = new AstNode(AST_BLOCK);
 	AstNode *result = nullptr;
 
@@ -4792,6 +4838,7 @@ AstNode *AstNode::eval_const_function(AstNode *fcall, bool must_succeed)
 			current_scope[stmt->str] = stmt;
 
 			block->children.erase(block->children.begin());
+			to_delete.push_back(stmt);
 			continue;
 		}
 
@@ -4804,6 +4851,7 @@ AstNode *AstNode::eval_const_function(AstNode *fcall, bool must_succeed)
 			current_scope[stmt->str] = stmt;
 
 			block->children.erase(block->children.begin());
+			to_delete.push_back(stmt);
 			continue;
 		}
 
@@ -4999,12 +5047,20 @@ finished:
 	delete block;
 	current_scope = backup_scope;
 
+	for (auto it : to_delete) {
+		delete it;
+	}
+	to_delete.clear();
+
 	return result;
 }
 
 void AstNode::allocateDefaultEnumValues()
 {
 	log_assert(type==AST_ENUM);
+	log_assert(children.size() > 0);
+	if (children.front()->attributes.count(ID::enum_base_type))
+		return; // already elaborated
 	int last_enum_int = -1;
 	for (auto node : children) {
 		log_assert(node->type==AST_ENUM_ITEM);
@@ -5078,6 +5134,23 @@ std::pair<AstNode*, AstNode*> AstNode::get_tern_choice()
 		choice = children[2], not_choice = children[1];
 
 	return {choice, not_choice};
+}
+
+std::string AstNode::try_pop_module_prefix() const
+{
+	AstNode *current_scope_ast = (current_ast_mod == nullptr) ? current_ast : current_ast_mod;
+	size_t pos = str.find('.', 1);
+	if (str[0] == '\\' && pos != std::string::npos) {
+		std::string new_str = "\\" + str.substr(pos + 1);
+		if (current_scope.count(new_str)) {
+			std::string prefix = str.substr(0, pos);
+			auto it = current_scope_ast->attributes.find(ID::hdlname);
+			if ((it != current_scope_ast->attributes.end() && it->second->str == prefix)
+					|| prefix == current_scope_ast->str)
+				return new_str;
+		}
+	}
+	return str;
 }
 
 YOSYS_NAMESPACE_END
